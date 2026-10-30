@@ -1,0 +1,33 @@
+{
+  "name": "cozyspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CozySpace - Không gian học tập & sống chậm phong cách Cozy Pastel",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently -k -n VITE,ELECTRON -c magenta,green \"vite --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "electron": "vite build && electron ."
+  },
+  "dependencies": {
+    "@fontsource/nunito": "^5.3.0",
+    "@fontsource/quicksand": "^5.3.0",
+    "lucide-react": "^1.64.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "autoprefixer": "^10.6.2",
+    "concurrently": "^10.0.6",
+    "cross-env": "^10.1.0",
+    "electron": "^45.1.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^3.4.19",
+    "vite": "^8.3.5",
+    "wait-on": "^9.5.1"
+  }
+}
