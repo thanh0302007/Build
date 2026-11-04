@@ -1,17 +1,18 @@
-// Bảng quản lý 9 vị trí ảnh (mở từ Sidebar)
-import { useMemo } from 'react';
-import { RotateCcw, Camera, HardDrive } from 'lucide-react';
+// Bảng quản lý 9 vị trí hình ảnh hệ thống (mở từ Sidebar)
+import { useEffect, useMemo, useState } from 'react';
+import { RotateCcw, Camera, HardDrive, FolderOpen, Images } from 'lucide-react';
 import { IMAGE_SLOTS, ALL_STORABLE_SLOT_IDS } from '../lib/imageSlots.jsx';
 import { estimateStorageKB } from '../lib/storage.js';
 import { ImageSlot, useImages } from './ImageSlot.jsx';
 import { Button, IconButton, Modal, cx } from './ui.jsx';
+import { useToast } from './Toast.jsx';
 
 function StatusBadge({ custom }) {
   return (
     <span
       className={cx(
         'rounded-full px-2 py-0.5 text-[11px] font-semibold',
-        custom ? 'bg-cozy-matcha/25 text-cozy-text' : 'bg-cozy-butter text-cozy-text'
+        custom ? 'bg-cozy-matcha/30 text-cozy-text' : 'bg-cozy-butter text-cozy-text'
       )}
     >
       {custom ? 'Đã tùy chỉnh' : 'Mặc định'}
@@ -21,6 +22,14 @@ function StatusBadge({ custom }) {
 
 export default function ImageManager() {
   const { images, managerOpen, closeManager, openEditor, resetImage, resetAll } = useImages();
+  const { confirm, toast } = useToast();
+  const [diskInfo, setDiskInfo] = useState(null);
+  const isElectron = Boolean(typeof window !== 'undefined' && window.cozyEnv?.isElectron);
+
+  useEffect(() => {
+    if (!managerOpen || !isElectron) return;
+    window.cozyEnv?.getStorageInfo?.().then(setDiskInfo).catch(() => {});
+  }, [managerOpen, images, isElectron]);
 
   const customCount = useMemo(
     () => ALL_STORABLE_SLOT_IDS.filter((id) => images?.[id]).length,
@@ -33,18 +42,46 @@ export default function ImageManager() {
     <Modal
       open={managerOpen}
       onClose={closeManager}
-      title="🖼️ Kho ảnh · Quản lý 9 vị trí hình ảnh"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Images size={18} strokeWidth={1.75} className="text-cozy-accent" />
+          <span>Kho ảnh · Quản lý 9 vị trí hình ảnh</span>
+        </span>
+      }
       width="max-w-5xl"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-          <span className="flex items-center gap-2 text-cozy-muted">
-            <HardDrive size={15} /> Đã tùy chỉnh {customCount}/{ALL_STORABLE_SLOT_IDS.length} ảnh · Bộ nhớ đang dùng ≈ {usedKB} KB / ~5.000 KB
-          </span>
+          <div className="flex flex-wrap items-center gap-3 text-cozy-muted">
+            <span className="flex items-center gap-2">
+              <HardDrive size={15} /> Đã tùy chỉnh {customCount}/{ALL_STORABLE_SLOT_IDS.length} ảnh ·{' '}
+              {diskInfo
+                ? `Ổ cứng đang lưu ${diskInfo.mediaCount} tệp media (${diskInfo.mediaSizeKB.toLocaleString('vi-VN')} KB)`
+                : `Bộ nhớ ≈ ${usedKB} KB`}
+            </span>
+            {isElectron && (
+              <button
+                type="button"
+                onClick={() => window.cozyEnv?.openDataFolder?.()}
+                className="inline-flex items-center gap-1 text-xs font-bold text-cozy-accent hover:underline"
+              >
+                <FolderOpen size={13} /> Mở thư mục trên máy
+              </button>
+            )}
+          </div>
           <Button
             variant="soft"
             disabled={customCount === 0}
-            onClick={() => {
-              if (window.confirm('Khôi phục TẤT CẢ hình ảnh về SVG gốc?')) resetAll();
+            onClick={async () => {
+              const ok = await confirm({
+                title: 'Khôi phục tất cả hình ảnh?',
+                message: 'Toàn bộ 9 vị trí ảnh hệ thống sẽ quay về bộ hình vẽ SVG gốc của CozySpace.',
+                confirmLabel: 'Khôi phục gốc',
+                danger: true,
+              });
+              if (ok) {
+                resetAll();
+                toast({ message: 'Đã khôi phục tất cả hình ảnh về SVG mặc định.' });
+              }
             }}
           >
             <RotateCcw size={16} /> Khôi phục tất cả
@@ -53,7 +90,7 @@ export default function ImageManager() {
       }
     >
       <p className="mb-5 text-sm text-cozy-muted">
-        Rê chuột lên từng hình và bấm <b className="text-cozy-text">📷 Đổi ảnh</b> để tải ảnh từ máy hoặc dán URL. Ảnh được lưu ngay trong máy bạn.
+        Rê chuột lên từng hình và bấm <b className="text-cozy-text">Đổi ảnh</b> để tải ảnh từ máy tính hoặc dán URL. Ảnh tải lên được lưu thành tệp thật trên ổ cứng máy tính của bạn.
       </p>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -61,11 +98,11 @@ export default function ImageManager() {
           if (slot.group) {
             const anyCustom = slot.group.some((g) => images?.[g.slotId]);
             return (
-              <div key={slot.slotId} className="rounded-3xl border border-cozy-line bg-white p-4 shadow-sm">
+              <div key={slot.slotId} className="rounded-3xl border border-cozy-line bg-cozy-card p-4 shadow-sm">
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div>
                     <p className="font-bold text-cozy-text">
-                      <span className="mr-1 text-cozy-peach">{index + 1}.</span> {slot.label}
+                      <span className="mr-1 text-cozy-accent">{index + 1}.</span> {slot.label}
                     </p>
                     <p className="text-xs text-cozy-muted">{slot.desc}</p>
                   </div>
@@ -82,12 +119,12 @@ export default function ImageManager() {
                         buttonPosition="center"
                         className="aspect-square w-full rounded-2xl bg-cozy-bg p-1"
                       />
-                      <span className="text-[10px] font-semibold text-cozy-muted">{g.label}</span>
+                      <span className="text-[11px] font-semibold text-cozy-muted">{g.label}</span>
                       {images?.[g.slotId] && (
                         <button
                           type="button"
                           onClick={() => resetImage(g.slotId)}
-                          className="text-[10px] text-cozy-peach hover:underline"
+                          className="text-[11px] font-bold text-cozy-accent hover:underline"
                         >
                           Gốc
                         </button>
@@ -95,18 +132,17 @@ export default function ImageManager() {
                     </div>
                   ))}
                 </div>
-                <p className="mt-3 font-mono text-[10px] text-cozy-muted/70">mood_happy · mood_peaceful · mood_excited · mood_tired · mood_sad</p>
               </div>
             );
           }
 
           const custom = images?.[slot.slotId];
           return (
-            <div key={slot.slotId} className="flex flex-col rounded-3xl border border-cozy-line bg-white p-4 shadow-sm">
+            <div key={slot.slotId} className="flex flex-col rounded-3xl border border-cozy-line bg-cozy-card p-4 shadow-sm">
               <div className="mb-3 flex items-start justify-between gap-2">
                 <div>
                   <p className="font-bold text-cozy-text">
-                    <span className="mr-1 text-cozy-peach">{index + 1}.</span> {slot.label}
+                    <span className="mr-1 text-cozy-accent">{index + 1}.</span> {slot.label}
                   </p>
                   <p className="text-xs text-cozy-muted">{slot.desc}</p>
                 </div>
@@ -125,7 +161,7 @@ export default function ImageManager() {
                 />
               </div>
               <div className="mt-3 flex items-center justify-between">
-                <span className="font-mono text-[10px] text-cozy-muted/70">{slot.slotId}</span>
+                <span className="font-mono text-[11px] text-cozy-muted/80">{slot.slotId}</span>
                 <div className="flex gap-1">
                   <IconButton title="Đổi ảnh" onClick={() => openEditor(slot.slotId)}>
                     <Camera size={16} />
@@ -142,4 +178,3 @@ export default function ImageManager() {
     </Modal>
   );
 }
-

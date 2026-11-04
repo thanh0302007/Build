@@ -16,6 +16,17 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { GEMINI_LIGHT_THEME_SCRIPT, GEMINI_PASTEL_CSS, isGeminiAppUrl } from './src/lib/geminiWebviewStyle.js';
+import {
+  attachCozyMediaProtocol,
+  flushDatabaseSync,
+  loadWindowState,
+  notifyMinimizedToTray,
+  registerCozyMediaScheme,
+  registerStorageIpcHandlers,
+  resolveAppIconPath,
+  setupSystemTray,
+  trackWindowState,
+} from './electron/desktopServices.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,15 +35,24 @@ const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 const PROD_PORT = 47821;
 const DIST_DIR = path.join(__dirname, 'dist');
 
+app.setAppUserModelId('com.cozyspace.desktop');
+registerCozyMediaScheme();
+
 nativeTheme.themeSource = 'light';
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
 const chromeVer = process.versions.chrome || '134.0.0.0';
-const CHROME_USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`;
+const CHROME_USER_AGENT =
+  process.platform === 'darwin'
+    ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+    : `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`;
 app.userAgentFallback = CHROME_USER_AGENT;
 
 let mainWindow = null;
 let activeAuthFlow = null;
+let staticServerUrl = null;
+let isQuitting = false;
+let closeBehavior = { mode: 'smart', activeBackground: false };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -50,35 +70,63 @@ const MIME = {
   '.ttf': 'font/ttf',
 };
 
-function startStaticServer() {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      try {
-        const urlPath = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname);
-        let filePath = path.normalize(path.join(DIST_DIR, urlPath));
-        if (!filePath.startsWith(DIST_DIR)) {
-          res.writeHead(403);
-          return res.end();
-        }
-        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-          filePath = path.join(DIST_DIR, 'index.html');
-        }
-        res.writeHead(200, {
-          'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
-        });
-        fs.createReadStream(filePath).pipe(res);
-      } catch (err) {
-        res.writeHead(500);
-        res.end(String(err));
-      }
+async function createStaticHandler(req, res) {
+  try {
+    const urlPath = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname);
+    let filePath = path.normalize(path.join(DIST_DIR, urlPath));
+    if (!filePath.startsWith(DIST_DIR)) {
+      res.writeHead(403);
+      return res.end();
+    }
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+      filePath = path.join(DIST_DIR, 'index.html');
+    }
+    const content = await fs.promises.readFile(filePath);
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
+      'Cache-Control': 'no-cache',
     });
-    server.once('error', reject);
-    server.listen(PROD_PORT, '127.0.0.1', () => resolve(`http://127.0.0.1:${PROD_PORT}/`));
-  });
+    res.end(content);
+  } catch (err) {
+    res.writeHead(500);
+    res.end(String(err));
+  }
 }
 
-// Tìm trình duyệt Google Chrome hoặc Microsoft Edge thật trên máy người dùng
+async function startStaticServer() {
+  if (staticServerUrl) return staticServerUrl;
+  const candidatePorts = [PROD_PORT, PROD_PORT + 1, PROD_PORT + 2, PROD_PORT + 3, 0];
+
+  for (const port of candidatePorts) {
+    try {
+      const url = await new Promise((resolve, reject) => {
+        const server = http.createServer(createStaticHandler);
+        server.once('error', reject);
+        server.listen(port, '127.0.0.1', () => {
+          const actualPort = server.address().port;
+          resolve(`http://127.0.0.1:${actualPort}/`);
+        });
+      });
+      staticServerUrl = url;
+      return url;
+    } catch {
+      /* thử cổng tiếp theo */
+    }
+  }
+  throw new Error('Không thể khởi tạo máy chủ nội bộ CozySpace.');
+}
+
+// Tìm trình duyệt Google Chrome hoặc Microsoft Edge thật trên máy người dùng (Windows & macOS)
 function findSystemChromiumBinary() {
+  if (process.platform === 'darwin') {
+    const macCandidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    ];
+    return macCandidates.find((p) => fs.existsSync(p)) || null;
+  }
+
   const localAppData = process.env.LOCALAPPDATA || '';
   const programFiles = process.env.PROGRAMFILES || 'C:\\Program Files';
   const programFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
@@ -346,14 +394,19 @@ function configureGeminiSession() {
 
 async function createWindow() {
   configureGeminiSession();
+  const winState = loadWindowState();
+  const iconPath = resolveAppIconPath(__dirname);
 
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 880,
+    width: winState.width,
+    height: winState.height,
+    x: winState.x,
+    y: winState.y,
     minWidth: 1024,
     minHeight: 680,
     backgroundColor: '#FDFBF7',
     title: 'CozySpace',
+    icon: iconPath,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'electron', 'preload.cjs'),
@@ -363,21 +416,70 @@ async function createWindow() {
     },
   });
 
+  if (winState.isMaximized) {
+    mainWindow.maximize();
+  }
+  trackWindowState(mainWindow);
+
+  // Hành vi đóng cửa sổ: thu nhỏ xuống System Tray khi bật chế độ chạy nền (như Zalo)
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return;
+    const shouldHideToTray =
+      closeBehavior.mode === 'always' ||
+      (closeBehavior.mode === 'smart' && closeBehavior.activeBackground);
+    if (shouldHideToTray) {
+      event.preventDefault();
+      mainWindow.hide();
+      notifyMinimizedToTray();
+    }
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 
   if (DEV_URL) {
-    await mainWindow.loadURL(DEV_URL);
+    console.log('[CozySpace] Đang kết nối giao diện Desktop:', DEV_URL);
+    try {
+      await mainWindow.loadURL(DEV_URL);
+    } catch {
+      const url = await startStaticServer();
+      await mainWindow.loadURL(url);
+    }
   } else {
     const url = await startStaticServer();
+    console.log('[CozySpace] Đang mở máy chủ nội bộ:', url);
     await mainWindow.loadURL(url);
+  }
+
+  if (!mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.setAlwaysOnTop(false);
+    console.log('[CozySpace] Cửa sổ Desktop đã hiển thị thành công!');
   }
 }
 
 // IPC cho nút [🔑 Đăng nhập Google] trên thanh tiêu đề Gemini
 ipcMain.handle('cozy:open-gemini-login', async () => signInViaSystemBrowser());
+
+// IPC đồng bộ cấu hình thu nhỏ xuống System Tray & thoát hẳn ứng dụng
+ipcMain.on('cozy:set-close-behavior', (_event, payload) => {
+  if (payload && typeof payload === 'object') {
+    closeBehavior = {
+      mode: payload.mode || 'smart',
+      activeBackground: Boolean(payload.activeBackground),
+    };
+  }
+});
+
+ipcMain.on('cozy:quit-app', () => {
+  isQuitting = true;
+  flushDatabaseSync();
+  app.quit();
+});
 
 // Quản lý thẻ <webview id="gemini-webview">
 app.on('web-contents-created', (_event, contents) => {
@@ -429,11 +531,41 @@ app.on('web-contents-created', (_event, contents) => {
   }
 });
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+// Khóa đơn tiến trình (mở CozySpace lần 2 sẽ đánh thức cửa sổ đang chạy như Zalo)
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
+
+  app.whenReady().then(() => {
+    attachCozyMediaProtocol();
+    registerStorageIpcHandlers(() => mainWindow);
+    createWindow().then(() => {
+      setupSystemTray(
+        __dirname,
+        () => mainWindow,
+        () => {
+          isQuitting = true;
+          flushDatabaseSync();
+        }
+      );
+    });
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
+
+app.on('before-quit', () => {
+  isQuitting = true;
+  flushDatabaseSync();
 });
 
 app.on('window-all-closed', () => {

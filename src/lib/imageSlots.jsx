@@ -56,8 +56,20 @@ const META_MAP = (() => {
   return map;
 })();
 
-export const getSlotMeta = (slotId) =>
-  META_MAP[slotId] || { slotId, label: slotId, desc: '', aspect: 'aspect-video', maxSize: 1200 };
+export const getSlotMeta = (slotId) => {
+  if (META_MAP[slotId]) return META_MAP[slotId];
+  if (String(slotId || '').startsWith('subject_cover_')) {
+    return {
+      slotId,
+      label: 'Bìa riêng môn học',
+      desc: 'Ảnh bìa tùy chỉnh riêng cho cuốn sổ môn học này',
+      aspect: 'aspect-[3/2]',
+      maxSize: 1200,
+      Svg: SubjectCoverSvg,
+    };
+  }
+  return { slotId, label: slotId, desc: '', aspect: 'aspect-video', maxSize: 1200 };
+};
 
 /** Toàn bộ slotId thực sự lưu trong cozy_custom_images (9 vị trí, mood mở rộng thành 5) */
 export const ALL_STORABLE_SLOT_IDS = Object.keys(META_MAP);

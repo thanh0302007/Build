@@ -1,21 +1,22 @@
 /** @type {import('tailwindcss').Config} */
-// Bảng màu Cozy Pastel chuẩn theo PROJECT_RULES.md (mục I.4)
+// Hệ thống màu Cozy dựa trên biến CSS RGB (hỗ trợ đầy đủ opacity /20, /30 và chuyển đổi Chủ đề)
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
         cozy: {
-          bg: '#FDFBF7', // Nền chính - Kem ấm
-          card: '#FFFFFF', // Nền thẻ - Trắng sữa
-          blush: '#FFF9F9', // Nền thẻ - Hồng phấn nhạt
-          peach: '#F4ACB7', // Primary - Hồng đào
-          matcha: '#A3C9A8', // Secondary - Xanh Matcha
-          lavender: '#E2D4F0', // Accent - Tím Oải hương
-          butter: '#FFF3B0', // Accent - Vàng bơ
-          text: '#4A4A4A', // Chữ chính
-          muted: '#8E8A86', // Chữ phụ
-          line: '#F0EAE1', // Viền mảnh
+          bg: 'rgb(var(--cozy-bg) / <alpha-value>)',
+          card: 'rgb(var(--cozy-card) / <alpha-value>)',
+          blush: 'rgb(var(--cozy-blush) / <alpha-value>)',
+          peach: 'rgb(var(--cozy-peach) / <alpha-value>)',
+          accent: 'rgb(var(--cozy-peach-dark) / <alpha-value>)',
+          matcha: 'rgb(var(--cozy-matcha) / <alpha-value>)',
+          lavender: 'rgb(var(--cozy-lavender) / <alpha-value>)',
+          butter: 'rgb(var(--cozy-butter) / <alpha-value>)',
+          text: 'rgb(var(--cozy-text) / <alpha-value>)',
+          muted: 'rgb(var(--cozy-muted) / <alpha-value>)',
+          line: 'rgb(var(--cozy-line) / <alpha-value>)',
         },
       },
       fontFamily: {
@@ -26,17 +27,21 @@ export default {
           '0%': { opacity: '0', transform: 'scale(0.96) translateY(6px)' },
           '100%': { opacity: '1', transform: 'scale(1) translateY(0)' },
         },
+        'fade-in': {
+          '0%': { opacity: '0', transform: 'translateY(4px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
         floaty: {
           '0%, 100%': { transform: 'translateY(0)' },
           '50%': { transform: 'translateY(-6px)' },
         },
       },
       animation: {
-        'pop-in': 'pop-in 0.22s ease-out',
+        'pop-in': 'pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+        'fade-in': 'fade-in 0.18s ease-out',
         floaty: 'floaty 3.5s ease-in-out infinite',
       },
     },
   },
   plugins: [],
 };
-

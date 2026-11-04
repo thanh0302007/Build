@@ -1,15 +1,34 @@
-// (1) Lịch & To-do
+// (1) Lịch & Việc cần làm (Calendar & To-do)
 import { useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Search, ListTodo, CalendarDays, Trash2 } from 'lucide-react';
-import { Card, Button, Input, Select, PageHeader, cx } from '../components/ui.jsx';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Search,
+  ListTodo,
+  CalendarDays,
+  Trash2,
+  Check,
+  Sparkles,
+  Tag,
+} from 'lucide-react';
+import { Card, Button, Input, Select, PageHeader, Modal, cx } from '../components/ui.jsx';
 import EmptyState from '../components/EmptyState.jsx';
-import { TodoItem, PRIORITIES, DEFAULT_CATEGORIES, sortTodos } from '../components/TodoItem.jsx';
+import {
+  TodoItem,
+  PRIORITIES,
+  REPEAT_OPTIONS,
+  DEFAULT_CATEGORIES,
+  sortTodos,
+  applyToggleTodoList,
+} from '../components/TodoItem.jsx';
 import { STORAGE_KEYS, useCozyStorage } from '../lib/storage.js';
 import { uid, todayISO, toISODate, fromISODate, WEEKDAYS_SHORT, formatLongDate } from '../lib/utils.js';
+import { useToast } from '../components/Toast.jsx';
+import { usePomodoroState } from '../context/PomodoroContext.jsx';
 
 const MONTHS = ['Tháng 1', 'Tháng 2', 'Tháng 3', 'Tháng 4', 'Tháng 5', 'Tháng 6', 'Tháng 7', 'Tháng 8', 'Tháng 9', 'Tháng 10', 'Tháng 11', 'Tháng 12'];
 
-/** 42 ô lịch (6 tuần), tuần bắt đầu từ Thứ 2 */
 function buildMonthGrid(year, month) {
   const first = new Date(year, month, 1);
   const offset = (first.getDay() + 6) % 7;
@@ -22,6 +41,9 @@ function buildMonthGrid(year, month) {
 
 export default function CalendarTodo() {
   const [todos, setTodos] = useCozyStorage(STORAGE_KEYS.TODOS);
+  const { toast, confirm } = useToast();
+  const { startFocusOn } = usePomodoroState();
+
   const today = todayISO();
   const [selected, setSelected] = useState(today);
   const [cursor, setCursor] = useState(() => {
@@ -33,11 +55,28 @@ export default function CalendarTodo() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [search, setSearch] = useState('');
 
-  const [form, setForm] = useState({ title: '', priority: 'medium', category: DEFAULT_CATEGORIES[0] });
+  const [form, setForm] = useState({
+    title: '',
+    priority: 'medium',
+    category: DEFAULT_CATEGORIES[0],
+    time: '',
+    repeat: 'none',
+  });
+
+  // Modal tạo danh mục mới (thay thế hoàn toàn window.prompt không chạy trên Electron)
+  const [newCatModal, setNewCatModal] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [customCategories, setCustomCategories] = useState([]);
 
   const categories = useMemo(
-    () => [...new Set([...DEFAULT_CATEGORIES, ...todos.map((t) => t.category).filter(Boolean)])],
-    [todos]
+    () => [
+      ...new Set([
+        ...DEFAULT_CATEGORIES,
+        ...customCategories,
+        ...todos.map((t) => t.category).filter(Boolean),
+      ]),
+    ],
+    [todos, customCategories]
   );
 
   const byDate = useMemo(() => {
@@ -86,27 +125,76 @@ export default function CalendarTodo() {
   const addTodo = () => {
     const title = form.title.trim();
     if (!title) return;
+    if (form.time && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
     setTodos((prev) => [
       ...prev,
-      { id: uid(), title, date: selected, priority: form.priority, category: form.category, completed: false },
+      {
+        id: uid(),
+        title,
+        date: selected,
+        time: form.time || '',
+        repeat: form.repeat || 'none',
+        priority: form.priority,
+        category: form.category,
+        completed: false,
+        subtasks: [],
+      },
     ]);
-    setForm((f) => ({ ...f, title: '' }));
+    setForm((f) => ({ ...f, title: '', time: '', repeat: 'none' }));
   };
 
   const onCategoryChange = (value) => {
     if (value === '__new__') {
-      const name = window.prompt('Tên danh mục mới:');
-      if (name && name.trim()) setForm((f) => ({ ...f, category: name.trim() }));
+      setNewCatName('');
+      setNewCatModal(true);
       return;
     }
     setForm((f) => ({ ...f, category: value }));
   };
 
-  const toggle = (id) => setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
-  const remove = (id) => setTodos((prev) => prev.filter((t) => t.id !== id));
+  const saveNewCategory = () => {
+    const name = newCatName.trim();
+    if (!name) return;
+    setCustomCategories((prev) => [...new Set([...prev, name])]);
+    setForm((f) => ({ ...f, category: name }));
+    setNewCatModal(false);
+  };
+
+  const toggle = (id) => setTodos((prev) => applyToggleTodoList(prev, id));
+
+  const remove = (id) => {
+    const removed = todos.find((t) => t.id === id);
+    if (!removed) return;
+    setTodos((prev) => prev.filter((t) => t.id !== id));
+    toast({
+      message: `Đã xóa việc "${removed.title.slice(0, 32)}"`,
+      onUndo: () => setTodos((prev) => [...prev, removed]),
+    });
+  };
+
   const update = (todo) => setTodos((prev) => prev.map((t) => (t.id === todo.id ? todo : t)));
-  const clearCompleted = () => {
-    if (window.confirm('Xóa tất cả việc đã hoàn thành?')) setTodos((prev) => prev.filter((t) => !t.completed));
+
+  const handleFocusTodo = (todo) => {
+    startFocusOn({ type: 'todo', id: todo.id, title: todo.title });
+    toast({ message: `🍅 Đang đếm giờ tập trung cho: "${todo.title}"`, tone: 'info' });
+  };
+
+  const clearCompleted = async () => {
+    const doneItems = todos.filter((t) => t.completed);
+    if (!doneItems.length) return;
+    const ok = await confirm({
+      title: 'Dọn dẹp việc đã hoàn thành?',
+      message: `Xóa ${doneItems.length} việc đã hoàn thành khỏi danh sách? Bạn vẫn có thể bấm Hoàn tác ngay sau khi xóa.`,
+      confirmLabel: 'Dọn sạch',
+    });
+    if (!ok) return;
+    setTodos((prev) => prev.filter((t) => !t.completed));
+    toast({
+      message: `Đã dọn ${doneItems.length} việc đã hoàn thành.`,
+      onUndo: () => setTodos((prev) => [...prev, ...doneItems]),
+    });
   };
 
   const selectedDate = fromISODate(selected);
@@ -114,30 +202,42 @@ export default function CalendarTodo() {
   return (
     <div>
       <PageHeader
-        emoji="📅"
+        icon={CalendarDays}
         title="Lịch & To-do"
-        subtitle="Sắp xếp từng ngày thật nhẹ nhàng, mỗi việc nhỏ hoàn thành là một niềm vui"
+        subtitle="Sắp xếp từng ngày thật nhẹ nhàng, có hẹn giờ nhắc việc & chu kỳ lặp lại tự động"
         right={
           <div className="flex gap-2 text-xs font-semibold">
-            <span className="rounded-full bg-white px-3 py-1.5 text-cozy-text shadow-sm ring-1 ring-cozy-line">Tổng {stats.total}</span>
-            <span className="rounded-full bg-cozy-matcha/25 px-3 py-1.5 text-cozy-text">Xong {stats.done}</span>
+            <span className="rounded-full bg-cozy-card px-3 py-1.5 text-cozy-text shadow-sm ring-1 ring-cozy-line">
+              Tổng {stats.total}
+            </span>
+            <span className="rounded-full bg-cozy-matcha/30 px-3 py-1.5 text-cozy-text">Xong {stats.done}</span>
             <span className="rounded-full bg-cozy-peach/25 px-3 py-1.5 text-cozy-text">Quá hạn {stats.overdue}</span>
           </div>
         }
       />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
-        {/* LỊCH THÁNG */}
-        <Card className="p-5 xl:col-span-3">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[52fr_48fr]">
+        {/* LỊCH THÁNG (52%) */}
+        <Card className="p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => moveMonth(-1)} className="rounded-xl p-2 text-cozy-muted hover:bg-cozy-blush hover:text-cozy-text" title="Tháng trước">
+              <button
+                type="button"
+                onClick={() => moveMonth(-1)}
+                className="rounded-xl p-2 text-cozy-muted hover:bg-cozy-blush hover:text-cozy-text"
+                title="Tháng trước"
+              >
                 <ChevronLeft size={18} />
               </button>
               <h2 className="min-w-[150px] text-center text-lg font-bold text-cozy-text">
                 {MONTHS[cursor.m]}, {cursor.y}
               </h2>
-              <button type="button" onClick={() => moveMonth(1)} className="rounded-xl p-2 text-cozy-muted hover:bg-cozy-blush hover:text-cozy-text" title="Tháng sau">
+              <button
+                type="button"
+                onClick={() => moveMonth(1)}
+                className="rounded-xl p-2 text-cozy-muted hover:bg-cozy-blush hover:text-cozy-text"
+                title="Tháng sau"
+              >
                 <ChevronRight size={18} />
               </button>
             </div>
@@ -148,7 +248,7 @@ export default function CalendarTodo() {
 
           <div className="grid grid-cols-7 gap-1.5 text-center">
             {WEEKDAYS_SHORT.map((w, i) => (
-              <div key={w} className={cx('pb-2 text-xs font-bold', i >= 5 ? 'text-cozy-peach' : 'text-cozy-muted')}>
+              <div key={w} className={cx('pb-2 text-xs font-bold', i >= 5 ? 'text-cozy-accent' : 'text-cozy-muted')}>
                 {w}
               </div>
             ))}
@@ -171,15 +271,17 @@ export default function CalendarTodo() {
                     }
                   }}
                   className={cx(
-                    'relative flex aspect-square min-h-[52px] flex-col items-center justify-start rounded-2xl border p-1.5 transition',
-                    isSelected ? 'border-cozy-peach bg-cozy-peach/15 shadow-sm' : 'border-transparent hover:border-cozy-line hover:bg-cozy-blush',
+                    'relative flex min-h-[46px] flex-col items-center justify-start rounded-2xl border p-1 transition',
+                    isSelected
+                      ? 'border-cozy-peach bg-cozy-peach/20 shadow-sm'
+                      : 'border-transparent hover:border-cozy-line hover:bg-cozy-blush',
                     !cell.inMonth && 'opacity-40'
                   )}
                 >
                   <span
                     className={cx(
-                      'flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold',
-                      isToday ? 'bg-cozy-peach text-white' : 'text-cozy-text'
+                      'flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold',
+                      isToday ? 'bg-cozy-peach text-[#2A2120]' : 'text-cozy-text'
                     )}
                   >
                     {cell.day}
@@ -187,13 +289,15 @@ export default function CalendarTodo() {
                   {list.length > 0 && (
                     <div className="mt-auto flex items-center gap-0.5 pb-0.5">
                       {allDone ? (
-                        <span className="text-[10px]">✅</span>
+                        <Check size={12} className="text-cozy-matcha" strokeWidth={2.5} />
                       ) : (
                         <>
                           {pending.slice(0, 3).map((t) => (
                             <span key={t.id} className={cx('h-1.5 w-1.5 rounded-full', PRIORITIES[t.priority]?.dot)} />
                           ))}
-                          {pending.length > 3 && <span className="text-[9px] font-bold text-cozy-muted">+{pending.length - 3}</span>}
+                          {pending.length > 3 && (
+                            <span className="text-[10px] font-bold text-cozy-muted">+{pending.length - 3}</span>
+                          )}
                         </>
                       )}
                     </div>
@@ -209,13 +313,15 @@ export default function CalendarTodo() {
                 <span className={cx('h-2 w-2 rounded-full', v.dot)} /> Ưu tiên {v.label}
               </span>
             ))}
-            <span className="flex items-center gap-1.5">✅ Đã xong hết</span>
+            <span className="flex items-center gap-1.5">
+              <Check size={12} className="text-cozy-matcha" strokeWidth={2.5} /> Đã xong hết
+            </span>
           </div>
         </Card>
 
-        {/* DANH SÁCH VIỆC */}
-        <Card className="flex flex-col p-5 xl:col-span-2">
-          <div className="mb-4 flex gap-1 rounded-2xl bg-cozy-blush p-1">
+        {/* DANH SÁCH VIỆC (48%) */}
+        <Card className="flex flex-col p-5">
+          <div className="mb-4 flex gap-1 rounded-2xl bg-cozy-blush/70 p-1">
             {[
               { id: 'day', label: 'Ngày đã chọn', icon: CalendarDays },
               { id: 'all', label: 'Tất cả việc', icon: ListTodo },
@@ -225,8 +331,8 @@ export default function CalendarTodo() {
                 type="button"
                 onClick={() => setView(t.id)}
                 className={cx(
-                  'flex flex-1 items-center justify-center gap-2 rounded-xl py-2 text-sm font-semibold transition',
-                  view === t.id ? 'bg-white text-cozy-text shadow-sm' : 'text-cozy-muted hover:text-cozy-text'
+                  'flex flex-1 items-center justify-center gap-2 rounded-xl py-2 text-sm font-bold transition',
+                  view === t.id ? 'bg-cozy-card text-cozy-text shadow-sm' : 'text-cozy-muted hover:text-cozy-text'
                 )}
               >
                 <t.icon size={15} /> {t.label}
@@ -236,36 +342,105 @@ export default function CalendarTodo() {
 
           {view === 'day' && (
             <>
-              <p className="mb-3 text-sm font-bold text-cozy-text">
-                {selected === today ? '🌟 Hôm nay · ' : ''}
-                {formatLongDate(selectedDate)}
+              <p className="mb-2.5 flex items-center gap-1.5 text-sm font-bold text-cozy-text">
+                {selected === today && <Sparkles size={14} className="text-cozy-accent" />}
+                <span>
+                  {selected === today ? 'Hôm nay · ' : ''}
+                  {formatLongDate(selectedDate)}
+                </span>
               </p>
-              <div className="mb-4 space-y-2 rounded-2xl border border-cozy-line bg-cozy-bg p-3">
-                <Input
-                  placeholder="Việc cần làm..."
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  onKeyDown={(e) => e.key === 'Enter' && addTodo()}
-                />
-                <div className="flex gap-2">
-                  <Select className="flex-1" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                    {Object.entries(PRIORITIES).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        Ưu tiên {v.label}
-                      </option>
-                    ))}
-                  </Select>
-                  <Select className="flex-1" value={form.category} onChange={(e) => onCategoryChange(e.target.value)}>
-                    {[...new Set([...categories, form.category])].map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                    <option value="__new__">＋ Danh mục mới...</option>
-                  </Select>
-                  <Button onClick={addTodo} disabled={!form.title.trim()} title="Thêm việc">
-                    <Plus size={16} />
+
+              {/* Khung nhập việc phẳng, thanh mảnh, 4 tùy chọn trên 1 hàng */}
+              <div
+                className="mb-4 space-y-2 pb-3"
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
+              >
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Việc cần làm..."
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    onKeyDown={(e) => e.key === 'Enter' && addTodo()}
+                    className="flex-1 py-2 text-sm"
+                  />
+                  <Button size="sm" onClick={addTodo} disabled={!form.title.trim()} title="Thêm việc" className="shrink-0 py-2">
+                    <Plus size={15} /> Thêm
                   </Button>
+                </div>
+
+                {/* Hàng tùy chọn thanh mảnh trên 1 dòng */}
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <label
+                    className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-semibold text-cozy-text transition hover:bg-cozy-blush"
+                    style={{ backgroundColor: 'rgba(140, 126, 126, 0.08)' }}
+                    title="Mức độ ưu tiên"
+                  >
+                    <span className={cx('h-2 w-2 shrink-0 rounded-full', PRIORITIES[form.priority]?.dot)} />
+                    <select
+                      value={form.priority}
+                      onChange={(e) => setForm({ ...form, priority: e.target.value })}
+                      className="cursor-pointer bg-transparent font-semibold text-cozy-text outline-none"
+                    >
+                      {Object.entries(PRIORITIES).map(([k, v]) => (
+                        <option key={k} value={k} className="bg-[var(--bg-app)] text-[var(--text-primary)]">
+                          Ưu tiên {v.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label
+                    className="inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-semibold text-cozy-text transition hover:bg-cozy-blush"
+                    style={{ backgroundColor: 'rgba(140, 126, 126, 0.08)' }}
+                    title="Danh mục công việc"
+                  >
+                    <Tag size={12} className="shrink-0 text-cozy-muted" />
+                    <select
+                      value={form.category}
+                      onChange={(e) => onCategoryChange(e.target.value)}
+                      className="cursor-pointer bg-transparent font-semibold text-cozy-text outline-none"
+                    >
+                      {[...new Set([...categories, form.category])].map((c) => (
+                        <option key={c} value={c} className="bg-[var(--bg-app)] text-[var(--text-primary)]">
+                          {c}
+                        </option>
+                      ))}
+                      <option value="__new__" className="bg-[var(--bg-app)] text-[var(--text-primary)]">
+                        ＋ Danh mục mới...
+                      </option>
+                    </select>
+                  </label>
+
+                  <label
+                    className="inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-semibold text-cozy-text transition hover:bg-cozy-blush"
+                    style={{ backgroundColor: 'rgba(140, 126, 126, 0.08)' }}
+                    title="Giờ nhắc việc (tùy chọn)"
+                  >
+                    <input
+                      type="time"
+                      value={form.time}
+                      onChange={(e) => setForm({ ...form, time: e.target.value })}
+                      className="w-[74px] cursor-pointer bg-transparent text-xs font-semibold text-cozy-text outline-none"
+                    />
+                  </label>
+
+                  <label
+                    className="inline-flex items-center rounded-xl px-2.5 py-1 text-xs font-semibold text-cozy-muted transition hover:bg-cozy-blush hover:text-cozy-text"
+                    style={{ backgroundColor: 'rgba(140, 126, 126, 0.08)' }}
+                    title="Chu kỳ lặp lại"
+                  >
+                    <select
+                      value={form.repeat}
+                      onChange={(e) => setForm({ ...form, repeat: e.target.value })}
+                      className="cursor-pointer bg-transparent font-semibold text-cozy-text outline-none"
+                    >
+                      {Object.entries(REPEAT_OPTIONS).map(([k, label]) => (
+                        <option key={k} value={k} className="bg-[var(--bg-app)] text-[var(--text-primary)]">
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
               </div>
             </>
@@ -274,7 +449,12 @@ export default function CalendarTodo() {
           {view === 'all' && (
             <div className="relative mb-3">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-cozy-muted" />
-              <Input className="pl-9" placeholder="Tìm việc..." value={search} onChange={(e) => setSearch(e.target.value)} />
+              <Input
+                className="pl-9"
+                placeholder="Tìm việc..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
             </div>
           )}
 
@@ -289,14 +469,20 @@ export default function CalendarTodo() {
                 type="button"
                 onClick={() => setStatusFilter(f.id)}
                 className={cx(
-                  'rounded-full px-3 py-1 text-xs font-semibold transition',
-                  statusFilter === f.id ? 'bg-cozy-peach text-white' : 'bg-cozy-blush text-cozy-muted hover:text-cozy-text'
+                  'rounded-full px-3 py-1 text-xs font-bold transition',
+                  statusFilter === f.id
+                    ? 'bg-cozy-peach text-[#2A2120]'
+                    : 'bg-cozy-blush text-cozy-muted hover:text-cozy-text'
                 )}
               >
                 {f.label}
               </button>
             ))}
-            <Select className="ml-auto py-1 text-xs" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <Select
+              className="ml-auto py-1 text-xs"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+            >
               <option value="all">Mọi danh mục</option>
               {categories.map((c) => (
                 <option key={c} value={c}>
@@ -306,15 +492,15 @@ export default function CalendarTodo() {
             </Select>
           </div>
 
-          <div className="cozy-scroll -mr-1 min-h-[200px] flex-1 overflow-y-auto pr-1 xl:max-h-[440px]">
+          <div className="cozy-scroll -mr-1 min-h-[200px] flex-1 overflow-y-auto px-1 xl:max-h-[460px]">
             {visible.length === 0 ? (
               <EmptyState
                 title={view === 'day' ? 'Ngày này còn trống' : 'Không tìm thấy việc nào'}
-                hint={view === 'day' ? 'Thêm một việc nhỏ cho ngày này nhé ✨' : 'Thử đổi bộ lọc hoặc từ khóa xem sao.'}
+                hint={view === 'day' ? 'Thêm một việc nhỏ cho ngày này nhé' : 'Thử đổi bộ lọc hoặc từ khóa xem sao.'}
                 size="w-36"
               />
             ) : (
-              <ul className="space-y-2">
+              <ul>
                 {visible.map((t) => (
                   <TodoItem
                     key={t.id}
@@ -322,6 +508,7 @@ export default function CalendarTodo() {
                     onToggle={toggle}
                     onDelete={remove}
                     onUpdate={update}
+                    onFocus={handleFocusTodo}
                     showDate={view === 'all'}
                     categories={categories}
                   />
@@ -339,7 +526,37 @@ export default function CalendarTodo() {
           )}
         </Card>
       </div>
+
+      {/* Modal tạo danh mục mới */}
+      <Modal
+        open={newCatModal}
+        onClose={() => setNewCatModal(false)}
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Tag size={17} strokeWidth={1.75} className="text-cozy-accent" />
+            <span>Thêm danh mục công việc mới</span>
+          </span>
+        }
+        width="max-w-sm"
+      >
+        <div className="space-y-4">
+          <Input
+            autoFocus
+            placeholder="VD: Tiếng Anh, Dự án nhóm, Gia đình..."
+            value={newCatName}
+            onChange={(e) => setNewCatName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && saveNewCategory()}
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setNewCatModal(false)}>
+              Hủy
+            </Button>
+            <Button onClick={saveNewCategory} disabled={!newCatName.trim()}>
+              Tạo danh mục
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
-

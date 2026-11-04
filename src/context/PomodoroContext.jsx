@@ -1,9 +1,12 @@
-// Bộ đếm Pomodoro dùng chung toàn app (vẫn chạy khi chuyển sang khu vực khác)
+// Bộ đếm Pomodoro + Trình phát nhạc nền + Âm thanh trắng Offline dùng chung toàn app
+// Tách 2 Context (State ổn định vs Clock 1s/lần) để không gây re-render thừa trên các trang
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { STORAGE_KEYS, useCozyStorage } from '../lib/storage.js';
-import { playChime } from '../lib/utils.js';
+import { ambientMixer, playChime, todayISO } from '../lib/utils.js';
+import { useToast } from '../components/Toast.jsx';
 
-const PomodoroContext = createContext(null);
+const PomodoroStateContext = createContext(null);
+const PomodoroClockContext = createContext(null);
 
 export const MODE_META = {
   work: { label: 'Tập trung', emoji: '📚', configKey: 'pomodoroWork' },
@@ -18,10 +21,15 @@ const clampMinutes = (v, fallback) => {
 
 export function PomodoroProvider({ children }) {
   const [config, setConfig] = useCozyStorage(STORAGE_KEYS.FOCUS_CONFIG);
+  const [settings] = useCozyStorage(STORAGE_KEYS.SETTINGS);
+  const { toast, celebrate } = useToast();
+
   const [mode, setMode] = useState('work');
   const [status, setStatus] = useState('idle'); // idle | running | paused
+  const [focusTarget, setFocusTarget] = useState(null); // { type: 'todo'|'subject', id, title } | null
   const [currentTrack, setCurrentTrack] = useState(null); // { title, videoId, emoji? }
-  const [trackPlaying, setTrackPlaying] = useState(true);
+  const [trackPlaying, setTrackPlaying] = useState(false);
+  const [ambientVolumes, setAmbientVolumes] = useState({ rain: 0, fire: 0, waves: 0, cafe: 0 });
   const ytIframeRef = useRef(null);
 
   const sendYouTubeCommand = useCallback((func, args = []) => {
@@ -41,6 +49,41 @@ export function PomodoroProvider({ children }) {
       return next;
     });
   }, [sendYouTubeCommand]);
+
+  // Lắng nghe sự kiện trạng thái 2 chiều từ YouTube IFrame API
+  useEffect(() => {
+    const onMessage = (e) => {
+      if (!String(e.origin || '').includes('youtube')) return;
+      try {
+        const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (data?.event === 'infoDelivery' && data.info && typeof data.info.playerState === 'number') {
+          if (data.info.playerState === 1) setTrackPlaying(true);
+          else if (data.info.playerState === 2 || data.info.playerState === 0) setTrackPlaying(false);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  const setAmbientVolume = useCallback((soundId, vol) => {
+    const clean = Math.max(0, Math.min(1, Number(vol) || 0));
+    ambientMixer.setVolume(soundId, clean);
+    setAmbientVolumes((prev) => ({ ...prev, [soundId]: clean }));
+  }, []);
+
+  const stopAllAmbient = useCallback(() => {
+    ambientMixer.stopAll();
+    setAmbientVolumes({ rain: 0, fire: 0, waves: 0, cafe: 0 });
+  }, []);
+
+  const hasActiveAmbient = useMemo(
+    () => Object.values(ambientVolumes).some((v) => v > 0.01),
+    [ambientVolumes]
+  );
+
   const durationFor = useCallback(
     (m) => {
       const fallback = { work: 25, short: 5, long: 15 }[m];
@@ -48,51 +91,109 @@ export function PomodoroProvider({ children }) {
     },
     [config]
   );
-  const [remainingMs, setRemainingMs] = useState(() => durationFor('work'));
-  const endAtRef = useRef(null);
-  const stateRef = useRef({ mode, status });
-  stateRef.current = { mode, status };
 
-  // Khi đổi cài đặt thời lượng lúc đang rảnh -> cập nhật lại đồng hồ
+  const [remainingMs, setRemainingMs] = useState(() => durationFor('work'));
+  const remainingRef = useRef(remainingMs);
+  remainingRef.current = remainingMs;
+  const endAtRef = useRef(null);
+  const stateRef = useRef({ mode, status, config, focusTarget });
+  stateRef.current = { mode, status, config, focusTarget };
+
   useEffect(() => {
     if (status === 'idle') setRemainingMs(durationFor(mode));
   }, [durationFor, mode, status]);
 
-  const notify = (title, body) => {
-    playChime();
-    try {
-      if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification(title, { body, silent: true });
+  const notify = useCallback(
+    (title, body) => {
+      playChime();
+      toast({ message: `${title} — ${body}`, tone: 'info' });
+      try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(title, { body, silent: true });
+        }
+      } catch {
+        /* bỏ qua */
       }
-    } catch {
-      /* bỏ qua */
-    }
-  };
+    },
+    [toast]
+  );
 
-  const complete = useCallback((countSession = true) => {
-    const { mode: m } = stateRef.current;
-    endAtRef.current = null;
-    if (m === 'work') {
-      let nextCount = config.completedSessions || 0;
-      if (countSession) {
-        setConfig((prev) => {
-          nextCount = (prev.completedSessions || 0) + 1;
-          return { ...prev, completedSessions: nextCount };
-        });
+  const complete = useCallback(
+    (countSession = true) => {
+      const { mode: m, config: curCfg, focusTarget: target } = stateRef.current;
+      endAtRef.current = null;
+
+      if (m === 'work') {
+        const workMins = clampMinutes(curCfg.pomodoroWork, 25);
+        const nextCount = countSession ? (curCfg.completedSessions || 0) + 1 : curCfg.completedSessions || 0;
+
+        if (countSession) {
+          const today = todayISO();
+          setConfig((prev) => {
+            const history = { ...(prev.dailyHistory || {}) };
+            const prevDay = history[today] || { sessions: 0, minutes: 0 };
+            history[today] = {
+              sessions: prevDay.sessions + 1,
+              minutes: prevDay.minutes + workMins,
+            };
+            return {
+              ...prev,
+              completedSessions: (prev.completedSessions || 0) + 1,
+              dailyHistory: history,
+            };
+          });
+        }
+
+        const nextMode = countSession && nextCount > 0 && nextCount % 4 === 0 ? 'long' : 'short';
+        const nextDuration = durationFor(nextMode);
+        setMode(nextMode);
+        setRemainingMs(nextDuration);
+
+        if (countSession) {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('cozy-companion-celebrate', {
+                detail: {
+                  type: 'pomodoro',
+                  message: 'Hoàn thành phiên tập trung trọn vẹn! Nghỉ ngơi chút nhé~',
+                },
+              })
+            );
+          }
+          if (nextCount % 4 === 0) {
+            celebrate(`Hoàn thành chu kỳ ${nextCount} phiên Pomodoro! Nghỉ dài thôi 🎉`);
+          } else {
+            notify(
+              'Hoàn thành phiên tập trung! 🎉',
+              target ? `Đã tập trung xong cho "${target.title}". Nghỉ ngơi chút nhé!` : 'Nghỉ ngơi một chút nhé, bạn làm tốt lắm!'
+            );
+          }
+        }
+
+        if (countSession && curCfg.autoStartBreak) {
+          endAtRef.current = Date.now() + nextDuration;
+          setStatus('running');
+        } else {
+          setStatus('idle');
+        }
+      } else {
+        const nextDuration = durationFor('work');
+        setMode('work');
+        setRemainingMs(nextDuration);
+        if (countSession) notify('Hết giờ nghỉ rồi 🌸', 'Sẵn sàng cho phiên tập trung tiếp theo nào!');
+
+        if (countSession && curCfg.autoStartWork) {
+          endAtRef.current = Date.now() + nextDuration;
+          setStatus('running');
+        } else {
+          setStatus('idle');
+        }
       }
-      const next = countSession && nextCount % 4 === 0 ? 'long' : 'short';
-      setMode(next);
-      setRemainingMs(durationFor(next));
-      if (countSession) notify('Hoàn thành phiên tập trung! 🎉', 'Nghỉ ngơi một chút nhé, bạn làm tốt lắm!');
-    } else {
-      setMode('work');
-      setRemainingMs(durationFor('work'));
-      if (countSession) notify('Hết giờ nghỉ rồi 🌸', 'Sẵn sàng cho phiên tập trung tiếp theo nào!');
-    }
-    setStatus('idle');
-  }, [durationFor, setConfig, config.completedSessions]);
+    },
+    [durationFor, setConfig, notify, celebrate]
+  );
 
-  // Vòng đếm chính - tính theo mốc thời gian thực nên không bị lệch khi tab ẩn
+  // Vòng đếm chính: chỉ cập nhật state khi số giây thực sự thay đổi (tối đa 1 lần/giây!)
   useEffect(() => {
     if (status !== 'running') return undefined;
     const tick = () => {
@@ -100,9 +201,13 @@ export function PomodoroProvider({ children }) {
       const left = endAtRef.current - Date.now();
       if (left <= 0) {
         setRemainingMs(0);
-        complete();
+        complete(true);
       } else {
-        setRemainingMs(left);
+        const prevSec = Math.ceil(remainingRef.current / 1000);
+        const nextSec = Math.ceil(left / 1000);
+        if (nextSec !== prevSec) {
+          setRemainingMs(left);
+        }
       }
     };
     tick();
@@ -126,9 +231,9 @@ export function PomodoroProvider({ children }) {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
-    endAtRef.current = Date.now() + remainingMs;
+    endAtRef.current = Date.now() + remainingRef.current;
     setStatus('running');
-  }, [remainingMs]);
+  }, []);
 
   const pause = useCallback(() => {
     if (endAtRef.current) setRemainingMs(Math.max(0, endAtRef.current - Date.now()));
@@ -154,6 +259,25 @@ export function PomodoroProvider({ children }) {
 
   const skip = useCallback(() => complete(false), [complete]);
 
+  /** Gắn 1 đầu việc hoặc môn học vào Pomodoro & bắt đầu đếm giờ ngay */
+  const startFocusOn = useCallback(
+    (target) => {
+      setFocusTarget(target);
+      if (stateRef.current.mode !== 'work') {
+        const workMs = durationFor('work');
+        setMode('work');
+        setRemainingMs(workMs);
+        remainingRef.current = workMs;
+      }
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
+      endAtRef.current = Date.now() + remainingRef.current;
+      setStatus('running');
+    },
+    [durationFor]
+  );
+
   const selectTrack = useCallback((track) => {
     setCurrentTrack(track);
     setTrackPlaying(Boolean(track));
@@ -164,15 +288,38 @@ export function PomodoroProvider({ children }) {
     setTrackPlaying(false);
   }, []);
 
-  const value = useMemo(
+  // Đồng bộ hành vi đóng cửa sổ với System Tray của Electron
+  useEffect(() => {
+    const activeBackground = status === 'running' || (Boolean(currentTrack) && trackPlaying) || hasActiveAmbient;
+    window.cozyEnv?.setCloseBehavior?.({
+      mode: settings?.closeToTray || 'smart',
+      activeBackground,
+    });
+  }, [status, currentTrack, trackPlaying, hasActiveAmbient, settings?.closeToTray]);
+
+  // Lắng nghe lệnh điều khiển nhanh từ menu chuột phải System Tray
+  useEffect(() => {
+    if (typeof window.cozyEnv?.onTrayAction !== 'function') return undefined;
+    return window.cozyEnv.onTrayAction((action) => {
+      if (action === 'toggle-pomodoro') {
+        if (stateRef.current.status === 'running') pause();
+        else start();
+      } else if (action === 'toggle-music') {
+        if (currentTrack) toggleTrackPlayback();
+      }
+    });
+  }, [pause, start, currentTrack, toggleTrackPlayback]);
+
+  const stateValue = useMemo(
     () => ({
       config,
       setConfig,
       mode,
       status,
-      remainingMs,
-      totalMs: durationFor(mode),
       isBreak: mode !== 'work',
+      focusTarget,
+      setFocusTarget,
+      startFocusOn,
       start,
       pause,
       reset,
@@ -184,6 +331,10 @@ export function PomodoroProvider({ children }) {
       selectTrack,
       stopTrack,
       toggleTrackPlayback,
+      ambientVolumes,
+      setAmbientVolume,
+      stopAllAmbient,
+      hasActiveAmbient,
       ytIframeRef,
     }),
     [
@@ -191,8 +342,8 @@ export function PomodoroProvider({ children }) {
       setConfig,
       mode,
       status,
-      remainingMs,
-      durationFor,
+      focusTarget,
+      startFocusOn,
       start,
       pause,
       reset,
@@ -203,19 +354,50 @@ export function PomodoroProvider({ children }) {
       selectTrack,
       stopTrack,
       toggleTrackPlayback,
+      ambientVolumes,
+      setAmbientVolume,
+      stopAllAmbient,
+      hasActiveAmbient,
     ]
   );
 
-  return <PomodoroContext.Provider value={value}>{children}</PomodoroContext.Provider>;
+  const clockValue = useMemo(
+    () => ({
+      remainingMs,
+      totalMs: durationFor(mode),
+    }),
+    [remainingMs, durationFor, mode]
+  );
+
+  return (
+    <PomodoroStateContext.Provider value={stateValue}>
+      <PomodoroClockContext.Provider value={clockValue}>{children}</PomodoroClockContext.Provider>
+    </PomodoroStateContext.Provider>
+  );
 }
 
-export function usePomodoro() {
-  const ctx = useContext(PomodoroContext);
-  if (!ctx) throw new Error('usePomodoro phải được dùng bên trong <PomodoroProvider>');
+/** Chỉ đọc trạng thái & hành động ổn định (KHÔNG re-render mỗi giây khi đồng hồ đếm) */
+export function usePomodoroState() {
+  const ctx = useContext(PomodoroStateContext);
+  if (!ctx) throw new Error('usePomodoroState phải được dùng bên trong <PomodoroProvider>');
   return ctx;
 }
 
+/** Chỉ đọc đồng hồ đếm ngược 1s/lần */
+export function usePomodoroClock() {
+  const ctx = useContext(PomodoroClockContext);
+  if (!ctx) throw new Error('usePomodoroClock phải được dùng bên trong <PomodoroProvider>');
+  return ctx;
+}
+
+/** Hook đầy đủ tương thích ngược */
+export function usePomodoro() {
+  const state = usePomodoroState();
+  const clock = usePomodoroClock();
+  return useMemo(() => ({ ...state, ...clock }), [state, clock]);
+}
+
 export const formatClock = (ms) => {
-  const s = Math.ceil(ms / 1000);
+  const s = Math.max(0, Math.ceil(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 };

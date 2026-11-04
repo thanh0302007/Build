@@ -27,20 +27,26 @@ const Sparkle = ({ x, y, s = 1, fill = '#FFF3B0' }) => (
 );
 
 // ---------------------------------------------------------------
-// 1. app_bg — Nền kem chấm bi mờ
+// 1. app_bg — Nền màu tĩnh dịu mắt kết hợp ambient radial-gradient rất mờ ở góc màn hình
 // ---------------------------------------------------------------
 export function AppBgSvg() {
-  const p = useSvgId('dots');
+  const g1 = useSvgId('amb1');
+  const g2 = useSvgId('amb2');
   return (
     <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
-        <pattern id={p} width="38" height="38" patternUnits="userSpaceOnUse">
-          <circle cx="7" cy="7" r="2.3" fill="#F4ACB7" opacity="0.22" />
-          <circle cx="26" cy="26" r="2.3" fill="#A3C9A8" opacity="0.22" />
-        </pattern>
+        <radialGradient id={g1} cx="10%" cy="12%" r="55%">
+          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.12" />
+          <stop offset="100%" stopColor="var(--bg-app)" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id={g2} cx="90%" cy="88%" r="60%">
+          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.08" />
+          <stop offset="100%" stopColor="var(--bg-app)" stopOpacity="0" />
+        </radialGradient>
       </defs>
-      <rect width="100%" height="100%" fill="#FDFBF7" />
-      <rect width="100%" height="100%" fill={`url(#${p})`} />
+      <rect width="100%" height="100%" fill="var(--bg-app)" />
+      <rect width="100%" height="100%" fill={`url(#${g1})`} />
+      <rect width="100%" height="100%" fill={`url(#${g2})`} />
     </svg>
   );
 }

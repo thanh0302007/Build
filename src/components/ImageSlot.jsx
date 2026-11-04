@@ -1,7 +1,7 @@
 // ============================================================
-// HỆ THỐNG HÌNH ẢNH 2 LỚP - PROJECT_RULES.md mục I.3
+// HỆ THỐNG HÌNH ẢNH 2 LỚP COZYSPACE DESKTOP
 //   Lớp 1: SVG mặc định (defaultSvg)
-//   Lớp 2: Ảnh tùy chỉnh (Base64 / URL) lưu trong `cozy_custom_images`
+//   Lớp 2: Ảnh tùy chỉnh lưu trực tiếp trên ổ cứng (`cozy-media://local/...`) hoặc URL
 // ============================================================
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, ImageUp, Link2, RotateCcw, Upload, AlertCircle } from 'lucide-react';
@@ -9,6 +9,7 @@ import { STORAGE_KEYS, useCozyStorage } from '../lib/storage.js';
 import { getSlotMeta } from '../lib/imageSlots.jsx';
 import { fileToCompressedDataURL } from '../lib/utils.js';
 import { Button, Input, Modal, cx } from './ui.jsx';
+import { useToast } from './Toast.jsx';
 
 const ImageContext = createContext(null);
 
@@ -62,14 +63,9 @@ export function useImages() {
   return ctx;
 }
 
-/**
- * <ImageSlot slotId="..." defaultSvg={<Svg />} />
- * - editable: hiện nút "📷 Đổi ảnh" khi rê chuột
- * - compact: nút dạng icon nhỏ (cho avatar, sticker)
- * - fit: 'cover' | 'contain'
- */
 export function ImageSlot({
   slotId,
+  fallbackSlotId,
   defaultSvg,
   className,
   editable = true,
@@ -80,7 +76,7 @@ export function ImageSlot({
   rounded,
 }) {
   const { images, openEditor } = useImages();
-  const custom = images?.[slotId];
+  const custom = images?.[slotId] || (fallbackSlotId ? images?.[fallbackSlotId] : null);
   const [brokenSrc, setBrokenSrc] = useState(null);
   const isBroken = custom && brokenSrc === custom;
   const meta = getSlotMeta(slotId);
@@ -110,7 +106,7 @@ export function ImageSlot({
       {isBroken && (
         <span
           title="Không tải được ảnh tùy chỉnh, đang hiển thị ảnh gốc"
-          className="absolute left-2 top-2 rounded-full bg-white/90 p-1 text-cozy-peach shadow-sm"
+          className="absolute left-2 top-2 rounded-full bg-cozy-card/90 p-1 text-cozy-peach shadow-sm"
         >
           <AlertCircle size={14} />
         </span>
@@ -125,22 +121,29 @@ export function ImageSlot({
           }}
           title={`Đổi ảnh: ${meta.label}`}
           className={cx(
-            'absolute z-10 flex items-center gap-1 rounded-full border border-cozy-line bg-white/90 font-semibold text-cozy-text shadow-sm backdrop-blur',
-            'opacity-0 transition-opacity duration-200 group-hover/slot:opacity-100 focus-visible:opacity-100 hover:bg-white',
+            'absolute z-10 flex items-center gap-1 rounded-full border border-cozy-line bg-cozy-card/90 font-semibold text-cozy-text shadow-sm backdrop-blur',
+            'opacity-0 transition-opacity duration-200 group-hover/slot:opacity-100 focus-visible:opacity-100 hover:bg-cozy-card',
             compact ? 'p-1.5 text-[11px]' : 'px-3 py-1.5 text-xs',
             posClass
           )}
         >
-          {compact ? <Camera size={13} /> : <>📷 Đổi ảnh</>}
+          {compact ? (
+            <Camera size={13} strokeWidth={1.75} />
+          ) : (
+            <>
+              <Camera size={13} strokeWidth={1.75} /> Đổi ảnh
+            </>
+          )}
         </button>
       )}
     </div>
   );
 }
 
-/** Hộp thoại đổi ảnh: tải từ máy (Base64), dán URL, dán từ clipboard, khôi phục gốc */
+/** Hộp thoại đổi ảnh: lưu trực tiếp trên ổ cứng, dán URL, Ctrl+V từ clipboard, khôi phục gốc */
 export function ImageEditorDialog({ slotId, onClose }) {
   const { images, setImage, resetImage } = useImages();
+  const { toast } = useToast();
   const [tab, setTab] = useState('upload');
   const [url, setUrl] = useState('');
   const [urlPreviewOk, setUrlPreviewOk] = useState(null);
@@ -156,7 +159,11 @@ export function ImageEditorDialog({ slotId, onClose }) {
   useEffect(() => {
     if (open) {
       setTab('upload');
-      setUrl(custom && !custom.startsWith('data:') ? custom : '');
+      setUrl(
+        custom && !custom.startsWith('data:') && !custom.startsWith('cozy-media://')
+          ? custom
+          : ''
+      );
       setUrlPreviewOk(null);
       setError('');
       setBusy(false);
@@ -170,8 +177,9 @@ export function ImageEditorDialog({ slotId, onClose }) {
       setBusy(true);
       setError('');
       try {
-        const dataUrl = await fileToCompressedDataURL(file, meta.maxSize);
-        setImage(slotId, dataUrl);
+        const savedUrl = await fileToCompressedDataURL(file, meta.maxSize, 0.86, slotId);
+        setImage(slotId, savedUrl);
+        toast({ message: `Đã lưu ảnh mới cho "${meta.label}"!` });
         onClose();
       } catch (err) {
         setError(err.message || 'Không xử lý được ảnh.');
@@ -179,7 +187,7 @@ export function ImageEditorDialog({ slotId, onClose }) {
         setBusy(false);
       }
     },
-    [slotId, meta, setImage, onClose]
+    [slotId, meta, setImage, onClose, toast]
   );
 
   // Dán ảnh trực tiếp bằng Ctrl+V
@@ -198,21 +206,39 @@ export function ImageEditorDialog({ slotId, onClose }) {
 
   const applyUrl = () => {
     const v = url.trim();
-    if (!/^(https?:\/\/|data:image\/)/i.test(v)) {
+    if (!/^(https?:\/\/|data:image\/|cozy-media:\/\/)/i.test(v)) {
       setError('URL ảnh cần bắt đầu bằng http:// hoặc https://');
       return;
     }
     setImage(slotId, v);
+    toast({ message: `Đã cập nhật ảnh từ URL cho "${meta.label}"!` });
     onClose();
   };
 
   if (!open) return null;
 
+  const sourceLabel = custom
+    ? custom.startsWith('cozy-media://')
+      ? 'Ảnh lưu trên ổ cứng máy'
+      : custom.startsWith('data:')
+        ? 'Ảnh tải lên'
+        : 'Ảnh từ URL'
+    : 'Hình gốc (SVG)';
+
   return (
-    <Modal open={open} onClose={onClose} title={`📷 Đổi ảnh · ${meta.label}`} width="max-w-xl">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Camera size={18} strokeWidth={1.75} className="text-cozy-accent" />
+          <span>Đổi ảnh · {meta.label}</span>
+        </span>
+      }
+      width="max-w-xl"
+    >
       <div className="space-y-5">
-        {/* Xem trước hiện tại */}
-        <div className="flex items-center gap-4 rounded-2xl border border-cozy-line bg-white p-3">
+        <div className="flex items-center gap-4 rounded-2xl border border-cozy-line bg-cozy-card p-3">
           <div className={cx('w-28 shrink-0 overflow-hidden rounded-xl border border-cozy-line bg-cozy-bg', meta.aspect)}>
             <ImageSlot slotId={slotId} editable={false} className="h-full w-full" fit={meta.parent ? 'contain' : 'cover'} />
           </div>
@@ -220,15 +246,13 @@ export function ImageEditorDialog({ slotId, onClose }) {
             <p className="font-semibold text-cozy-text">{meta.desc}</p>
             <p className="mt-1 text-cozy-muted">
               Đang dùng:{' '}
-              <span className={cx('rounded-full px-2 py-0.5 text-xs font-semibold', custom ? 'bg-cozy-matcha/25 text-cozy-text' : 'bg-cozy-butter text-cozy-text')}>
-                {custom ? (custom.startsWith('data:') ? 'Ảnh tải lên' : 'Ảnh từ URL') : 'Hình gốc (SVG)'}
+              <span className={cx('rounded-full px-2 py-0.5 text-xs font-semibold', custom ? 'bg-cozy-matcha/30 text-cozy-text' : 'bg-cozy-butter text-cozy-text')}>
+                {sourceLabel}
               </span>
             </p>
-            <p className="mt-1 font-mono text-[11px] text-cozy-muted/80">slotId: {slotId}</p>
           </div>
         </div>
 
-        {/* Tabs */}
         <div className="flex gap-2 rounded-2xl bg-cozy-blush p-1">
           {[
             { id: 'upload', icon: Upload, label: 'Tải từ máy tính' },
@@ -243,7 +267,7 @@ export function ImageEditorDialog({ slotId, onClose }) {
               }}
               className={cx(
                 'flex flex-1 items-center justify-center gap-2 rounded-xl py-2 text-sm font-semibold transition',
-                tab === t.id ? 'bg-white text-cozy-text shadow-sm' : 'text-cozy-muted hover:text-cozy-text'
+                tab === t.id ? 'bg-cozy-card text-cozy-text shadow-sm' : 'text-cozy-muted hover:text-cozy-text'
               )}
             >
               <t.icon size={16} /> {t.label}
@@ -266,15 +290,17 @@ export function ImageEditorDialog({ slotId, onClose }) {
             onClick={() => fileRef.current?.click()}
             className={cx(
               'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-3xl border-2 border-dashed px-6 py-10 text-center transition',
-              dragOver ? 'border-cozy-peach bg-cozy-blush' : 'border-cozy-line bg-white hover:border-cozy-peach/60'
+              dragOver ? 'border-cozy-peach bg-cozy-blush' : 'border-cozy-line bg-cozy-card hover:border-cozy-peach/60'
             )}
           >
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cozy-peach/20 text-cozy-peach">
               <ImageUp size={24} />
             </div>
-            <p className="font-semibold text-cozy-text">{busy ? 'Đang xử lý ảnh...' : 'Bấm để chọn ảnh hoặc kéo thả vào đây'}</p>
-            <p className="text-xs text-cozy-muted">PNG, JPG, WEBP, GIF, SVG · Có thể nhấn Ctrl+V để dán ảnh</p>
-            <p className="text-[11px] text-cozy-muted/80">Ảnh sẽ được tự thu nhỏ (tối đa {meta.maxSize}px) để tiết kiệm bộ nhớ</p>
+            <p className="font-semibold text-cozy-text">
+              {busy ? 'Đang lưu ảnh vào máy...' : 'Bấm để chọn ảnh hoặc kéo thả vào đây'}
+            </p>
+            <p className="text-xs text-cozy-muted">PNG, JPG, WEBP, GIF, SVG · Nhấn Ctrl+V để dán ảnh nhanh</p>
+            <p className="text-xs text-cozy-muted/80">Ảnh được lưu trực tiếp trên ổ cứng laptop (không giới hạn bộ nhớ)</p>
             <input
               ref={fileRef}
               type="file"
@@ -300,7 +326,7 @@ export function ImageEditorDialog({ slotId, onClose }) {
               onKeyDown={(e) => e.key === 'Enter' && applyUrl()}
             />
             {url.trim() && (
-              <div className={cx('mx-auto w-48 overflow-hidden rounded-2xl border border-cozy-line bg-white', meta.aspect)}>
+              <div className={cx('mx-auto w-48 overflow-hidden rounded-2xl border border-cozy-line bg-cozy-card', meta.aspect)}>
                 <img
                   src={url.trim()}
                   alt="Xem trước"
@@ -331,6 +357,7 @@ export function ImageEditorDialog({ slotId, onClose }) {
             disabled={!custom}
             onClick={() => {
               resetImage(slotId);
+              toast({ message: `Đã khôi phục hình gốc cho "${meta.label}".` });
               onClose();
             }}
           >
@@ -344,4 +371,3 @@ export function ImageEditorDialog({ slotId, onClose }) {
     </Modal>
   );
 }
-

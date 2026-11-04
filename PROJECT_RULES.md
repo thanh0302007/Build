@@ -12,8 +12,9 @@ Bạn đang xây dựng ứng dụng Desktop/Web "CozySpace" (Electron + React +
 3. **BẮT BUỘC CÓ HỆ THỐNG HÌNH ẢNH 2 LỚP (`<ImageSlot />`):**
    - Mọi hình ảnh minh họa trong app phải được bọc trong một Component dùng chung tên là `<ImageSlot slotId="..." defaultSvg={...} />`.
    - Lớp 1 (Mặc định): AI phải tự vẽ sẵn hình SVG dễ thương cho `defaultSvg`.
-   - Lớp 2 (Tùy chỉnh): Khi người dùng bấm nút "📷 Đổi ảnh" trên hình đó, cho phép tải ảnh từ máy tính (lưu Base64 vào LocalStorage) hoặc dán URL ảnh để đè lên hình mặc định, kèm nút "Khôi phục gốc".
-4. **ĐỒNG BỘ GIAO DIỆN COZY PASTEL 100%:**
+   - Lớp 2 (Tùy chỉnh): Khi người dùng bấm nút "Đổi ảnh" (kèm icon SVG Camera) trên hình đó, cho phép tải ảnh từ máy tính (lưu Base64 vào LocalStorage) hoặc dán URL ảnh để đè lên hình mặc định, kèm nút "Khôi phục gốc".
+4. **TUÂN THỦ HỆ THỐNG THIẾT KẾ MỚI (xem mục V) 100%:** (Thay thế bảng màu Cozy Pastel cũ; mọi màu lấy từ CSS variables của 4 theme.)
+   - *(Bảng màu cũ dưới đây chỉ còn là tham khảo lịch sử, KHÔNG dùng cho code mới.)*
    - Không dùng màu đen tuyền (`#000000`), xanh dương gắt hay đỏ gắt mặc định của Tailwind.
    - Chỉ sử dụng bảng màu chuẩn:
      + Nền chính: Kem ấm `#FDFBF7`
@@ -45,7 +46,7 @@ Mọi module trong ứng dụng phải đọc và ghi dữ liệu vào `localSto
 
 ## III. DANH SÁCH 9 VỊ TRÍ HÌNH ẢNH (`slotId`) BẮT BUỘC HỖ TRỢ ĐỔI ẢNH
 AI phải tạo sẵn SVG mặc định và gắn `<ImageSlot />` cho đúng 9 mã `slotId` sau:
-1. `app_bg`: Hình nền toàn ứng dụng (mặc định: nền kem chấm bi mờ).
+1. `app_bg`: Hình nền toàn ứng dụng (mặc định: nền màu tĩnh dịu mắt kèm chuyển màu ambient radial-gradient rất mờ).
 2. `dashboard_banner`: Banner ngang trang chủ (mặc định: góc bàn học ấm cúng bên cửa sổ).
 3. `user_avatar`: Ảnh đại diện người dùng ở Sidebar.
 4. `mascot_focus`: Nhân vật Mascot khi đang chạy giờ học Pomodoro (mặc định: mèo đeo tai nghe đọc sách).
@@ -65,16 +66,39 @@ AI phải tạo sẵn SVG mặc định và gắn `<ImageSlot />` cho đúng 9 m
   + **Cột phải (45%):** Khung nhúng Gemini.
 - **Cách xử lý Khung Gemini:**
   + Sử dụng `<webview id="gemini-webview" src="https://gemini.google.com/app" partition="persist:gemini">`. (Nếu đang chạy trên môi trường Preview trình duyệt chưa có Electron, hiển thị khung giao diện mô phỏng giống hệt kèm nút mở Popup cửa sổ đôi để không bị lỗi trắng trang).
-  + **CSS Injection:** Khi `<webview>` tải xong, tự động chèn CSS ẩn Sidebar (`mat-sidenav`), ẩn Header của Google, đổi `background-color` sang `#FDFBF7`, đổi font sang `Quicksand`, bo tròn khung chat với viền `#F4ACB7`.
-  + **Thanh công cụ Prompt tự động (Smart Bridge):** Phía trên khung Gemini có 3 nút: `[✨ Tóm tắt bài]`, `[🎴 Tạo Flashcard]`, `[📝 Tạo câu hỏi Quiz]`. Khi bấm:
+  + **CSS Injection:** Khi `<webview>` tải xong, tự động chèn CSS ẩn Sidebar (`mat-sidenav`), ẩn Header của Google, đổi `background-color`, font và viền khung chat theo CSS variables của theme đang chọn (`--bg-app`, `--accent`, `--border-subtle`).
+  + **Thanh công cụ Prompt tự động (Smart Bridge):** Phía trên khung Gemini có 3 nút (icon SVG Lucide, không emoji): `[Tóm tắt bài]`, `[Tạo Flashcard]`, `[Tạo câu hỏi Quiz]`. Khi bấm:
     1. App lấy nội dung tài liệu đang chọn ở Cột trái.
     2. Ghép với câu lệnh yêu cầu Gemini trả lời theo định dạng JSON chuẩn (đối với Flashcard/Quiz).
     3. Tự động điền vào ô chat của Gemini (hoặc Copy vào Clipboard) để gửi.
-  + **Nút `[🪄 Nhập câu trả lời vào Phòng Ôn tập]`:** Đọc chuỗi JSON/văn bản từ câu trả lời của Gemini (tự động lọc bỏ dấu ```json thừa) và lưu thẳng vào `cozy_study_sets` để hiển thị ngay thành thẻ Flashcard lật 3D và bài Quiz bên Cột trái.
+  + **Nút `[Nhập câu trả lời vào Phòng Ôn tập]` (icon SVG):** Đọc chuỗi JSON/văn bản từ câu trả lời của Gemini (tự động lọc bỏ dấu ```json thừa) và lưu thẳng vào `cozy_study_sets` để hiển thị ngay thành thẻ Flashcard lật 3D và bài Quiz bên Cột trái.
 
 ### 2. Khu vực Tập trung & Nhạc YouTube (Focus Zone)
 - **Đồng hồ Pomodoro:** Có nút Bắt đầu / Tạm dừng / Đặt lại, tự động chuyển đổi hình ảnh giữa `mascot_focus` (khi đang đếm giờ học) và `mascot_break` (khi chuyển sang giờ nghỉ).
 - **Trình phát YouTube:**
-  + Có hàm `extractYouTubeId(url)` hỗ trợ mọi định dạng link (`[youtube.com/watch?v=](https://youtube.com/watch?v=)...`, `youtu.be/...`, `[youtube.com/live/](https://youtube.com/live/)...`).
-  + Nhúng bằng `<iframe src="[https://www.youtube.com/embed/$](https://www.youtube.com/embed/$){videoId}?autoplay=1" allow="autoplay; encrypted-media" />` nằm gọn trong khung bo tròn màu pastel.
+  + Có hàm `extractYouTubeId(url)` hỗ trợ mọi định dạng link (`youtube.com/watch?v=...`, `youtu.be/...`, `youtube.com/live/...`).
+  + Nhúng bằng `<iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1" allow="autoplay; encrypted-media" />` nằm gọn trong khung bo tròn màu pastel.
   + Có sẵn danh sách các kênh nhạc Lofi/Piano/Tiếng mưa học bài để bấm chọn 1 chạm và cho phép người dùng lưu thêm link YouTube yêu thích.
+
+---
+
+## V. COZYSPACE UI/UX DESIGN SYSTEM RULES (STRICT)
+*(Mục này có ưu tiên cao nhất về giao diện; nếu mâu thuẫn với mục khác, mục V thắng.)*
+
+1. **TRIẾT LÝ THIẾT KẾ:** "Ambient Lofi & Translucent Stationery" (tối giản, tĩnh lặng, bề mặt giấy mờ).
+2. **CẤM TUYỆT ĐỐI (ANTI-AI PATTERNS):**
+   - **KHÔNG lồng thẻ trong thẻ (No Nested Bordered Cards):** Chỉ khung chứa lớn ngoài cùng (Section Container) mới được có nền mờ và viền `1px`. Các phần tử con bên trong (danh sách việc, giao dịch, quỹ, thống kê) phải hiển thị dạng dòng phẳng (flat rows), phân tách bằng khoảng trắng hoặc đường kẻ ngang mảnh `1px solid var(--border-subtle)`.
+   - **KHÔNG dùng Emoji hệ thống** (📅, 📚, 🎧, 🐷, 🔥, ✨, 💡): thay thế 100% bằng bộ icon SVG nét vẽ tay đồng bộ (Lucide/Tabler icons, `stroke-width: 1.75px`, bo tròn góc).
+   - **KHÔNG lạm dụng Pill Badges đủ màu sắc:** mỗi công việc hoặc giao dịch chỉ dùng tối đa 1 chấm tròn màu (`6px`) cho mức độ ưu tiên; danh mục/thời gian dùng chữ thuần màu xám dịu.
+   - **KHÔNG để chữ bị cắt cụt** (`text-overflow: ellipsis` / `...`) ở các con số tiền tệ, tên công việc và nút bấm.
+3. **HỆ THỐNG ĐA CHỦ ĐỀ (4 THEMES QUA CSS VARIABLES):**
+
+   | Theme | `--bg-app` | `--bg-card` | `--text-primary` | `--text-muted` | `--accent` | `--border-subtle` |
+   |---|---|---|---|---|---|---|
+   | `sakura-cream` | `#FAF7F2` | `rgba(255, 255, 255, 0.82)` | `#3D3535` | `#8C7E7E` | `#E5989B` | `rgba(229, 152, 155, 0.2)` |
+   | `botanical-matcha` | `#F4F7F4` | `rgba(255, 255, 255, 0.85)` | `#2C3E35` | `#6E8578` | `#6B9080` | `rgba(107, 144, 128, 0.2)` |
+   | `vintage-cafe` | `#F5EFE6` | `rgba(253, 250, 246, 0.85)` | `#3E3228` | `#8A7968` | `#A67B5B` | `rgba(166, 123, 91, 0.2)` |
+   | `midnight-lofi` | `#14241D` | `rgba(28, 46, 38, 0.78)` | `#E6F0EC` | `#8FA89B` | `#4ADE80` | `rgba(74, 222, 128, 0.15)` |
+
+   - Không hard-code màu hex trong component; luôn dùng CSS variables (`--bg-app`, `--bg-card`, `--text-primary`, `--text-muted`, `--accent`, `--border-subtle`).
+4. **BẢO TOÀN LOGIC:** Giữ nguyên 100% state, hàm xử lý sự kiện, dữ liệu LocalStorage/Database và cấu trúc định tuyến hiện có.
