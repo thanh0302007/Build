@@ -3,6 +3,8 @@ name: Build CozySpace Desktop (Windows & macOS)
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -20,12 +22,13 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci || npm install
 
       - name: Build Windows Installer (.exe)
         run: npm run dist:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows Installer
         uses: actions/upload-artifact@v4
@@ -33,6 +36,7 @@ jobs:
           name: CozySpace-Windows-Installer
           path: |
             release/*.exe
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
@@ -47,12 +51,13 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci || npm install
 
       - name: Build macOS Installer (.dmg & .zip for Apple Silicon + Intel)
         run: npm run dist:mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload macOS Installers
         uses: actions/upload-artifact@v4
@@ -61,4 +66,4 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
-
+          if-no-files-found: error
